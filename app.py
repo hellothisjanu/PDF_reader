@@ -1,138 +1,123 @@
 import os
-import tempfile
-import shutil
-import requests
-import PyPDF2
 import streamlit as st
+import tempfile
+import PyPDF2
 
-# Updated imports for new LangChain
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.schema import Document
+from langchain.docstore.document import Document
 from langchain_community.vectorstores import Chroma
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.chains import ConversationalRetrievalChain
 
 
-
-# ---------------- CONFIG ----------------
+# ------------------------
+# API Key setup
+# ------------------------
+OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+# OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 EMBEDDING_MODEL = "text-embedding-3-small"
-LLM_MODEL = "gpt-4o-mini"
-CHROMA_PERSIST_DIR = os.path.join(tempfile.gettempdir(), "chroma_store")
-TOP_K = 4
 
 
-# ---------------- HELPERS ----------------
-def extract_text_from_pdf(uploaded_file):
-    """Extract text from each page of PDF."""
-    reader = PyPDF2.PdfReader(uploaded_file)
-    docs = []
-    for i, page in enumerate(reader.pages):
-        text = page.extract_text() or ""
-        if text.strip():
-            docs.append(Document(page_content=text, metadata={
-                "source": uploaded_file.name,
-                "page": i + 1
-            }))
+# ------------------------
+# Utility: Extract text from PDF
+# ------------------------
+def extract_text_from_pdf(file):
+    pdf_reader = PyPDF2.PdfReader(file)
+    text = ""
+    for page in pdf_reader.pages:
+        text += page.extract_text() or ""
+    return text
+
+
+# ------------------------
+# Utility: Split text into chunks
+# ------------------------
+def create_chunks(text):
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=200,
+        length_function=len
+    )
+    chunks = splitter.split_text(text)
+    docs = [Document(page_content=chunk) for chunk in chunks]
     return docs
 
 
-def chunk_documents(docs):
-    """Split text into chunks with overlap."""
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1200, chunk_overlap=200)
-    split_docs = []
-    for d in docs:
-        for i, chunk in enumerate(splitter.split_text(d.page_content)):
-            meta = dict(d.metadata)
-            meta["chunk"] = i + 1
-            split_docs.append(Document(page_content=chunk, metadata=meta))
-    return split_docs
-
-
-def get_vectorstore(docs):
-    """Build Chroma vector DB from documents."""
-    embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL, openai_api_key=os.environ["OPENAI_API_KEY"])
-    vectordb = Chroma.from_documents(docs, embedding_function=embeddings, persist_directory=CHROMA_PERSIST_DIR)
+# ------------------------
+# Build Vector Store
+# ------------------------
+def build_vectorstore(docs):
+    embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL, openai_api_key=OPENAI_API_KEY)
+    vectordb = Chroma.from_documents(docs, embedding=embeddings, persist_directory="chroma_db")
     vectordb.persist()
     return vectordb
 
 
-def serper_search(query):
-    """Use Serper.dev for web search if needed."""
-    api_key = os.environ.get("SERPER_API_KEY")
-    if not api_key:
-        return []
-    url = "https://api.serper.dev/search"
-    headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
-    payload = {"q": query, "num": 3}
-    resp = requests.post(url, headers=headers, json=payload)
-    data = resp.json()
-    results = []
-    for item in data.get("organic", [])[:3]:
-        results.append(f"{item.get('title')}: {item.get('snippet')} ({item.get('link')})")
-    return results
+# ------------------------
+# Build QA Chain
+# ------------------------
+def build_qa_chain(vectordb):
+    retriever = vectordb.as_retriever(search_type="similarity", search_kwargs={"k": 3})
+    llm = ChatOpenAI(model="gpt-4o-mini", openai_api_key=OPENAI_API_KEY)
+    qa_chain = ConversationalRetrievalChain.from_llm(
+        llm=llm,
+        retriever=retriever,
+        return_source_documents=True
+    )
+    return qa_chain
 
 
-# ---------------- STREAMLIT APP ----------------
-st.set_page_config(page_title="Universal Document Intelligence", layout="wide")
-st.title("🧠 Universal Document Intelligence Chatbot")
+# ------------------------
+# Streamlit UI
+# ------------------------
+st.set_page_config(page_title="📚 Universal Document Chatbot", layout="wide")
+st.title("📚 Universal Document Intelligence Chatbot")
 
-with st.sidebar:
-    st.header("Upload PDFs & Settings")
-    uploaded_files = st.file_uploader("Upload PDF files", type=["pdf"], accept_multiple_files=True)
-    if st.button("Clear Vector DB"):
-        if os.path.exists(CHROMA_PERSIST_DIR):
-            shutil.rmtree(CHROMA_PERSIST_DIR)
-            st.success("Cleared stored embeddings.")
+# Sidebar
+st.sidebar.header("Upload PDF Documents")
+uploaded_files = st.sidebar.file_uploader("Upload PDFs", type=["pdf"], accept_multiple_files=True)
 
-    openai_key = st.text_input("OpenAI API Key", type="password")
-    if openai_key:
-        os.environ["OPENAI_API_KEY"] = openai_key
-
-    serp_key = st.text_input("Serper.dev API Key (optional)", type="password")
-    if serp_key:
-        os.environ["SERPER_API_KEY"] = serp_key
+# Session State for persistence
+if "qa_chain" not in st.session_state:
+    st.session_state.qa_chain = None
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
 
 
-# Build vector DB
-if st.button("Ingest Documents"):
-    if not uploaded_files:
-        st.warning("Please upload at least one PDF.")
-    else:
-        all_docs = []
-        for f in uploaded_files:
-            all_docs.extend(extract_text_from_pdf(f))
-        chunks = chunk_documents(all_docs)
-        vectordb = get_vectorstore(chunks)
-        st.success(f"Ingested {len(chunks)} chunks.")
+# Step 1: Process uploaded files
+if uploaded_files:
+    all_text = ""
+    for uploaded_file in uploaded_files:
+        text = extract_text_from_pdf(uploaded_file)
+        all_text += text
+
+    # Split into chunks
+    docs = create_chunks(all_text)
+
+    # Build Vector DB
+    vectordb = build_vectorstore(docs)
+
+    # Build QA Chain
+    st.session_state.qa_chain = build_qa_chain(vectordb)
+    st.success("✅ Documents processed and ready!")
 
 
-# Chat Interface
-query = st.text_input("Ask a question about your documents")
-if st.button("Get Answer"):
-    if not query:
-        st.warning("Enter a question first.")
-    elif not os.path.exists(CHROMA_PERSIST_DIR):
-        st.error("Please upload and ingest documents first.")
-    else:
-        embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL, openai_api_key=os.environ["OPENAI_API_KEY"])
-        vectordb = Chroma(persist_directory=CHROMA_PERSIST_DIR, embedding_function=embeddings)
-        retriever = vectordb.as_retriever(search_kwargs={"k": TOP_K})
+# Step 2: Chat interface
+query = st.text_input("Ask a question about your documents:")
 
-        chat_llm = ChatOpenAI(model_name=LLM_MODEL, temperature=0, openai_api_key=os.environ["OPENAI_API_KEY"])
-        qa_chain = ConversationalRetrievalChain.from_llm(chat_llm, retriever)
+if query and st.session_state.qa_chain:
+    result = st.session_state.qa_chain({
+        "question": query,
+        "chat_history": st.session_state.chat_history
+    })
 
-        result = qa_chain({"question": query, "chat_history": []})
-        answer = result["answer"]
+    st.session_state.chat_history.append((query, result["answer"]))
 
-        st.subheader("Answer")
-        st.write(answer)
+    # Show answer
+    st.markdown(f"**🤖 Answer:** {result['answer']}")
 
-        # Fallback: web search
-        if any(word in query.lower() for word in ["latest", "2024", "current", "vs", "price", "trend"]):
-            st.subheader("Web Results")
-            web_res = serper_search(query)
-            if web_res:
-                for r in web_res:
-                    st.write("- " + r)
-            else:
-                st.info("No web results (Serper API key missing).")
+    # Show sources
+    if result.get("source_documents"):
+        with st.expander("📄 Sources"):
+            for doc in result["source_documents"]:
+                st.markdown(f"- {doc.page_content[:200]}...")  # preview of chunk
