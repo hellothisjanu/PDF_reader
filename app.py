@@ -5,12 +5,13 @@ import requests
 import PyPDF2
 import streamlit as st
 
-from langchain.embeddings.openai import OpenAIEmbeddings
+# Updated imports for new LangChain
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.docstore.document import Document
-from langchain.vectorstores import Chroma
-from langchain.chat_models import ChatOpenAI
+from langchain.schema import Document
+from langchain_community.vectorstores import Chroma
 from langchain.chains import ConversationalRetrievalChain
+
 
 
 # ---------------- CONFIG ----------------
