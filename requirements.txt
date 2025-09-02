@@ -1,6 +1,9 @@
 streamlit
 langchain
+langchain-openai
+langchain-community
 openai
 chromadb
+faiss-cpu
 PyPDF2
 requests
