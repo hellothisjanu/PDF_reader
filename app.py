@@ -14,7 +14,8 @@ except Exception:
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.docstore.document import Document
 from langchain_community.vectorstores import Chroma
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_community.embeddings import HuggingFaceEmbeddings  # ✅ FREE embeddings
+from langchain_openai import ChatOpenAI
 from langchain.chains import ConversationalRetrievalChain
 
 
@@ -25,8 +26,6 @@ OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
 if not OPENAI_API_KEY:
     st.error("❌ OPENAI_API_KEY not found in Streamlit Secrets! Please add it in `.streamlit/secrets.toml`.")
     st.stop()
-
-EMBEDDING_MODEL = "text-embedding-3-small"
 
 
 # ------------------------
@@ -55,10 +54,10 @@ def create_chunks(text):
 
 
 # ------------------------
-# Build Vector Store
+# Build Vector Store (FREE HuggingFace embeddings)
 # ------------------------
 def build_vectorstore(docs):
-    embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL, openai_api_key=OPENAI_API_KEY)
+    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
     vectordb = Chroma.from_documents(docs, embedding=embeddings, persist_directory="chroma_db")
     vectordb.persist()
     return vectordb
