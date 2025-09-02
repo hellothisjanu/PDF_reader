@@ -1,7 +1,5 @@
 streamlit
-langchain-community
-chromadb
+langchain>=0.1.0
 pypdf
-sentence-transformers
-transformers
-torch
+chromadb
+openai
