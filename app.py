@@ -1,7 +1,15 @@
+import sys
 import os
 import streamlit as st
 import tempfile
 import PyPDF2
+
+# --- SQLite Patch (fix for Streamlit Cloud / ChromaDB) ---
+try:
+    __import__('pysqlite3')
+    sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+except Exception:
+    pass
 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.docstore.document import Document
@@ -11,10 +19,13 @@ from langchain.chains import ConversationalRetrievalChain
 
 
 # ------------------------
-# API Key setup
+# API Key setup (stored in .streamlit/secrets.toml)
 # ------------------------
-OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
-# OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
+if not OPENAI_API_KEY:
+    st.error("❌ OPENAI_API_KEY not found in Streamlit Secrets! Please add it in `.streamlit/secrets.toml`.")
+    st.stop()
+
 EMBEDDING_MODEL = "text-embedding-3-small"
 
 
@@ -106,18 +117,21 @@ if uploaded_files:
 query = st.text_input("Ask a question about your documents:")
 
 if query and st.session_state.qa_chain:
-    result = st.session_state.qa_chain({
-        "question": query,
-        "chat_history": st.session_state.chat_history
-    })
+    try:
+        result = st.session_state.qa_chain({
+            "question": query,
+            "chat_history": st.session_state.chat_history
+        })
 
-    st.session_state.chat_history.append((query, result["answer"]))
+        st.session_state.chat_history.append((query, result["answer"]))
 
-    # Show answer
-    st.markdown(f"**🤖 Answer:** {result['answer']}")
+        # Show answer
+        st.markdown(f"**🤖 Answer:** {result['answer']}")
 
-    # Show sources
-    if result.get("source_documents"):
-        with st.expander("📄 Sources"):
-            for doc in result["source_documents"]:
-                st.markdown(f"- {doc.page_content[:200]}...")  # preview of chunk
+        # Show sources
+        if result.get("source_documents"):
+            with st.expander("📄 Sources"):
+                for doc in result["source_documents"]:
+                    st.markdown(f"- {doc.page_content[:200]}...")  # preview of chunk
+    except Exception as e:
+        st.error(f"⚠️ Error while querying: {e}")
