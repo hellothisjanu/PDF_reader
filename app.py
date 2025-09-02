@@ -4,7 +4,8 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.docstore.document import Document
 from langchain.vectorstores import FAISS
 from langchain.chains import ConversationalRetrievalChain
-from langchain.chat_models import ChatGoogleGemini
+
+import google.generativeai as genai
 
 # ------------------------
 # Google Gemini API key
@@ -13,6 +14,8 @@ GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 if not GEMINI_API_KEY:
     st.error("❌ GEMINI_API_KEY not found! Add it in Streamlit Secrets.")
     st.stop()
+
+genai.configure(api_key=GEMINI_API_KEY)
 
 # ------------------------
 # Streamlit UI
@@ -24,9 +27,7 @@ st.title("📚 PDF Chatbot with LangChain + Google Gemini")
 st.sidebar.header("Upload PDF Documents")
 uploaded_files = st.sidebar.file_uploader("Upload PDFs", type=["pdf"], accept_multiple_files=True)
 
-# Session state for chat history
-if "qa_chain" not in st.session_state:
-    st.session_state.qa_chain = None
+# Session state
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
@@ -51,18 +52,20 @@ def create_chunks(text):
     return docs
 
 def build_vectorstore(docs):
-    vectordb = FAISS.from_documents(docs, embedding=None)  # Gemini handles embeddings internally
+    # Using FAISS for retrieval
+    vectordb = FAISS.from_documents(docs, embedding=None)  # embeddings handled by Gemini
     return vectordb
 
-def build_qa_chain(vectordb):
-    llm = ChatGoogleGemini(api_key=GEMINI_API_KEY, model="gemini-1.5-t")
-    retriever = vectordb.as_retriever(search_kwargs={"k":3})
-    qa_chain = ConversationalRetrievalChain.from_llm(
-        llm=llm,
-        retriever=retriever,
-        return_source_documents=True
+# ------------------------
+# Chat wrapper using Gemini API
+# ------------------------
+def query_gemini(prompt):
+    response = genai.chat.create(
+        model="gemini-1.5-t",
+        messages=[{"author": "user", "content": prompt}],
+        temperature=0.7
     )
-    return qa_chain
+    return response.last
 
 # ------------------------
 # Process uploaded PDFs
@@ -74,7 +77,7 @@ if uploaded_files:
 
     docs = create_chunks(all_text)
     vectordb = build_vectorstore(docs)
-    st.session_state.qa_chain = build_qa_chain(vectordb)
+    st.session_state.vectordb = vectordb
     st.success("✅ Documents processed and ready!")
 
 # ------------------------
@@ -82,20 +85,14 @@ if uploaded_files:
 # ------------------------
 query = st.text_input("Ask a question about your documents:")
 
-if query and st.session_state.qa_chain:
-    try:
-        result = st.session_state.qa_chain({
-            "question": query,
-            "chat_history": st.session_state.chat_history
-        })
-        st.session_state.chat_history.append((query, result["answer"]))
-        st.markdown(f"**🤖 Answer:** {result['answer']}")
+if query and "vectordb" in st.session_state:
+    # Simple retrieval: find relevant chunks
+    retriever = st.session_state.vectordb.as_retriever(search_kwargs={"k":3})
+    relevant_docs = retriever.get_relevant_documents(query)
+    context_text = "\n\n".join([doc.page_content for doc in relevant_docs])
 
-        # Show sources
-        if result.get("source_documents"):
-            with st.expander("📄 Sources"):
-                for doc in result["source_documents"]:
-                    st.markdown(f"- {doc.page_content[:200]}...")
+    prompt = f"Context:\n{context_text}\n\nQuestion: {query}"
+    answer = query_gemini(prompt)
 
-    except Exception as e:
-        st.error(f"⚠️ Error while querying: {e}")
+    st.session_state.chat_history.append((query, answer))
+    st.markdown(f"**🤖 Answer:** {answer}")
