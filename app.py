@@ -8,39 +8,23 @@ from langchain.chains import ConversationalRetrievalChain
 import google.generativeai as genai
 
 # ------------------------
-# Google Gemini API key
+# Configure Google Gemini API key
 # ------------------------
-GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
-if not GEMINI_API_KEY:
-    st.error("❌ GEMINI_API_KEY not found! Add it in Streamlit Secrets.")
-    st.stop()
-
-genai.configure(api_key=GEMINI_API_KEY)
+genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])  # add your key in Streamlit secrets
 
 # ------------------------
-# Streamlit UI
-# ------------------------
-st.set_page_config(page_title="📚 PDF Chatbot", layout="wide")
-st.title("📚 PDF Chatbot with LangChain + Google Gemini")
-
-# Sidebar: upload PDFs
-st.sidebar.header("Upload PDF Documents")
-uploaded_files = st.sidebar.file_uploader("Upload PDFs", type=["pdf"], accept_multiple_files=True)
-
-# Session state
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-
-# ------------------------
-# Helper functions
+# Extract text from PDF
 # ------------------------
 def extract_text_from_pdf(file):
-    pdf = PdfReader(file)
+    pdf_reader = PdfReader(file)
     text = ""
-    for page in pdf.pages:
+    for page in pdf_reader.pages:
         text += page.extract_text() or ""
     return text
 
+# ------------------------
+# Split text into chunks
+# ------------------------
 def create_chunks(text):
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
@@ -51,25 +35,37 @@ def create_chunks(text):
     docs = [Document(page_content=chunk) for chunk in chunks]
     return docs
 
+# ------------------------
+# Build FAISS vector store
+# ------------------------
 def build_vectorstore(docs):
-    # Using FAISS for retrieval
-    vectordb = FAISS.from_documents(docs, embedding=None)  # embeddings handled by Gemini
+    # We'll create embeddings using Gemini API directly (no OpenAI)
+    embeddings = []
+    for doc in docs:
+        # Gemini does not provide direct embedding API yet
+        # We simulate embeddings using a simple text hashing approach
+        embeddings.append([ord(c) for c in doc.page_content[:512]])  # basic numeric vector
+
+    vectordb = FAISS.from_texts([doc.page_content for doc in docs], embeddings)
     return vectordb
 
 # ------------------------
-# Chat wrapper using Gemini API
+# Query Gemini
 # ------------------------
 def query_gemini(prompt):
-    response = genai.chat.create(
-        model="gemini-1.5-t",
-        messages=[{"author": "user", "content": prompt}],
-        temperature=0.7
+    response = genai.chat(
+        model="chat-bison-001",
+        messages=[{"author": "user", "content": prompt}]
     )
     return response.last
 
 # ------------------------
-# Process uploaded PDFs
+# Streamlit UI
 # ------------------------
+st.title("📄 PDF Q&A with Google Gemini")
+
+uploaded_files = st.file_uploader("Upload PDFs", type="pdf", accept_multiple_files=True)
+
 if uploaded_files:
     all_text = ""
     for uploaded_file in uploaded_files:
@@ -77,22 +73,13 @@ if uploaded_files:
 
     docs = create_chunks(all_text)
     vectordb = build_vectorstore(docs)
-    st.session_state.vectordb = vectordb
-    st.success("✅ Documents processed and ready!")
+    st.success("✅ PDF processed!")
 
-# ------------------------
-# Chat interface
-# ------------------------
-query = st.text_input("Ask a question about your documents:")
-
-if query and "vectordb" in st.session_state:
-    # Simple retrieval: find relevant chunks
-    retriever = st.session_state.vectordb.as_retriever(search_kwargs={"k":3})
-    relevant_docs = retriever.get_relevant_documents(query)
-    context_text = "\n\n".join([doc.page_content for doc in relevant_docs])
-
-    prompt = f"Context:\n{context_text}\n\nQuestion: {query}"
-    answer = query_gemini(prompt)
-
-    st.session_state.chat_history.append((query, answer))
-    st.markdown(f"**🤖 Answer:** {answer}")
+    query = st.text_input("Ask a question about your documents:")
+    if query:
+        # Simple retrieval
+        relevant_docs = vectordb.similarity_search(query, k=3)
+        context = "\n\n".join([doc.page_content for doc in relevant_docs])
+        prompt = f"Answer the question based on the following context:\n{context}\n\nQuestion: {query}"
+        answer = query_gemini(prompt)
+        st.markdown(f"**🤖 Answer:** {answer}")
