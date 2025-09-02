@@ -1,35 +1,25 @@
-import os
 import streamlit as st
 from pypdf import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.docstore.document import Document
 from langchain.vectorstores import Chroma
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.chains import ConversationalRetrievalChain
+from langchain.embeddings import OpenAIEmbeddings
 from langchain.chat_models import ChatOpenAI
-from transformers import pipeline
+from langchain.chains import ConversationalRetrievalChain
 
 # ------------------------
-# LLM Setup using HuggingFace pipeline
+# OpenAI API Key from Streamlit Secrets
 # ------------------------
-@st.cache_resource
-def load_hf_model():
-    # Using a free model from HuggingFace
-    return pipeline("text-generation", model="tiiuae/falcon-7b-instruct", max_length=512)
+OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
+if not OPENAI_API_KEY:
+    st.error("❌ OPENAI_API_KEY not found in Streamlit Secrets!")
+    st.stop()
 
-hf_model = load_hf_model()
-
-# Wrapper to mimic LangChain chat interface
-class HuggingFaceLLM:
-    def __init__(self, pipeline):
-        self.pipeline = pipeline
-
-    def __call__(self, prompt, **kwargs):
-        result = self.pipeline(prompt, **kwargs)
-        return result[0]['generated_text']
+EMBEDDING_MODEL = "text-embedding-3-small"
+LLM_MODEL = "gpt-4o-mini"
 
 # ------------------------
-# PDF Processing
+# Utility: Extract text from PDF
 # ------------------------
 def extract_text_from_pdf(file):
     reader = PdfReader(file)
@@ -38,10 +28,13 @@ def extract_text_from_pdf(file):
         text += page.extract_text() or ""
     return text
 
-def create_chunks(text):
+# ------------------------
+# Split text into chunks
+# ------------------------
+def create_chunks(text, chunk_size=1000, chunk_overlap=200):
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
         length_function=len
     )
     chunks = splitter.split_text(text)
@@ -49,21 +42,20 @@ def create_chunks(text):
     return docs
 
 # ------------------------
-# Vector Store using free HuggingFace embeddings
+# Build Vector DB using OpenAI embeddings
 # ------------------------
 def build_vectorstore(docs):
-    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    embeddings = OpenAIEmbeddings(model=EMBEDDING_MODEL, openai_api_key=OPENAI_API_KEY)
     vectordb = Chroma.from_documents(docs, embedding=embeddings, persist_directory="chroma_db")
     vectordb.persist()
     return vectordb
 
 # ------------------------
-# QA Chain
+# Build Conversational QA Chain
 # ------------------------
 def build_qa_chain(vectordb):
     retriever = vectordb.as_retriever(search_type="similarity", search_kwargs={"k": 3})
-    # Use HuggingFace model wrapper
-    llm = HuggingFaceLLM(hf_model)
+    llm = ChatOpenAI(model=LLM_MODEL, openai_api_key=OPENAI_API_KEY)
     qa_chain = ConversationalRetrievalChain.from_llm(
         llm=llm,
         retriever=retriever,
@@ -74,12 +66,13 @@ def build_qa_chain(vectordb):
 # ------------------------
 # Streamlit UI
 # ------------------------
-st.set_page_config(page_title="📚 Free PDF Chatbot", layout="wide")
-st.title("📚 Free PDF Document Chatbot")
+st.set_page_config(page_title="📚 PDF Chatbot", layout="wide")
+st.title("📚 PDF Document Chatbot")
 
-# Sidebar: Upload PDFs
-st.sidebar.header("Upload PDF Documents")
-uploaded_files = st.sidebar.file_uploader("Upload PDFs", type=["pdf"], accept_multiple_files=True)
+# Upload PDFs
+uploaded_files = st.sidebar.file_uploader(
+    "Upload PDF files", type=["pdf"], accept_multiple_files=True
+)
 
 # Session state
 if "qa_chain" not in st.session_state:
@@ -87,7 +80,7 @@ if "qa_chain" not in st.session_state:
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-# Process uploaded PDFs
+# Process PDFs
 if uploaded_files:
     all_text = ""
     for file in uploaded_files:
@@ -117,4 +110,4 @@ if query and st.session_state.qa_chain:
                 for doc in result["source_documents"]:
                     st.markdown(f"- {doc.page_content[:200]}...")
     except Exception as e:
-        st.error(f"⚠️ Error: {e}")
+        st.error(f"⚠️ Error while querying: {e}")
