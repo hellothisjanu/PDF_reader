@@ -8,3 +8,6 @@ faiss-cpu
 PyPDF2
 requests
 pysqlite3-binary
+sentence-transformers
+
+
