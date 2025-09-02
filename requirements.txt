@@ -1,6 +1,5 @@
 streamlit
 pypdf
-langchain-community
-google-generativeai
-tiktoken
+langchain>=0.1.0
 faiss-cpu
+google-generativeai
