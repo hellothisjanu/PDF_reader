@@ -2,32 +2,44 @@ import streamlit as st
 from pypdf import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.docstore.document import Document
-from langchain.chains import ConversationalRetrievalChain
 from langchain.vectorstores import FAISS
+from langchain.chains import ConversationalRetrievalChain
 from langchain.chat_models import ChatGoogleGemini
-from langchain.embeddings import GoogleGeminiEmbeddings
 
 # ------------------------
-# Google API Key from Streamlit secrets
+# Google Gemini API key
 # ------------------------
-GOOGLE_API_KEY = st.secrets.get("GOOGLE_API_KEY", "")
-if not GOOGLE_API_KEY:
-    st.error("❌ GOOGLE_API_KEY not found in Streamlit Secrets! Add it in the app secrets.")
+GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", "")
+if not GEMINI_API_KEY:
+    st.error("❌ GEMINI_API_KEY not found! Add it in Streamlit Secrets.")
     st.stop()
 
 # ------------------------
-# PDF Text Extraction
+# Streamlit UI
+# ------------------------
+st.set_page_config(page_title="📚 PDF Chatbot", layout="wide")
+st.title("📚 PDF Chatbot with LangChain + Google Gemini")
+
+# Sidebar: upload PDFs
+st.sidebar.header("Upload PDF Documents")
+uploaded_files = st.sidebar.file_uploader("Upload PDFs", type=["pdf"], accept_multiple_files=True)
+
+# Session state for chat history
+if "qa_chain" not in st.session_state:
+    st.session_state.qa_chain = None
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
+# ------------------------
+# Helper functions
 # ------------------------
 def extract_text_from_pdf(file):
-    reader = PdfReader(file)
+    pdf = PdfReader(file)
     text = ""
-    for page in reader.pages:
+    for page in pdf.pages:
         text += page.extract_text() or ""
     return text
 
-# ------------------------
-# Split text into chunks
-# ------------------------
 def create_chunks(text):
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
@@ -35,22 +47,16 @@ def create_chunks(text):
         length_function=len
     )
     chunks = splitter.split_text(text)
-    return [Document(page_content=chunk) for chunk in chunks]
+    docs = [Document(page_content=chunk) for chunk in chunks]
+    return docs
 
-# ------------------------
-# Build FAISS Vector Store
-# ------------------------
 def build_vectorstore(docs):
-    embeddings = GoogleGeminiEmbeddings(api_key=GOOGLE_API_KEY)
-    vectordb = FAISS.from_documents(docs, embeddings)
+    vectordb = FAISS.from_documents(docs, embedding=None)  # Gemini handles embeddings internally
     return vectordb
 
-# ------------------------
-# Build QA Chain
-# ------------------------
 def build_qa_chain(vectordb):
-    llm = ChatGoogleGemini(api_key=GOOGLE_API_KEY, model="gemini-1.5-t")
-    retriever = vectordb.as_retriever(search_type="similarity", search_kwargs={"k": 3})
+    llm = ChatGoogleGemini(api_key=GEMINI_API_KEY, model="gemini-1.5-t")
+    retriever = vectordb.as_retriever(search_kwargs={"k":3})
     qa_chain = ConversationalRetrievalChain.from_llm(
         llm=llm,
         retriever=retriever,
@@ -59,22 +65,8 @@ def build_qa_chain(vectordb):
     return qa_chain
 
 # ------------------------
-# Streamlit UI
-# ------------------------
-st.set_page_config(page_title="📚 Gemini PDF Chatbot", layout="wide")
-st.title("📚 Google Gemini Document Chatbot")
-
-# Sidebar for PDF upload
-st.sidebar.header("Upload PDF Files")
-uploaded_files = st.sidebar.file_uploader("Upload PDFs", type=["pdf"], accept_multiple_files=True)
-
-# Session state for persistence
-if "qa_chain" not in st.session_state:
-    st.session_state.qa_chain = None
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
-
 # Process uploaded PDFs
+# ------------------------
 if uploaded_files:
     all_text = ""
     for uploaded_file in uploaded_files:
@@ -85,7 +77,9 @@ if uploaded_files:
     st.session_state.qa_chain = build_qa_chain(vectordb)
     st.success("✅ Documents processed and ready!")
 
+# ------------------------
 # Chat interface
+# ------------------------
 query = st.text_input("Ask a question about your documents:")
 
 if query and st.session_state.qa_chain:
@@ -94,14 +88,14 @@ if query and st.session_state.qa_chain:
             "question": query,
             "chat_history": st.session_state.chat_history
         })
-
         st.session_state.chat_history.append((query, result["answer"]))
         st.markdown(f"**🤖 Answer:** {result['answer']}")
 
+        # Show sources
         if result.get("source_documents"):
             with st.expander("📄 Sources"):
                 for doc in result["source_documents"]:
-                    st.markdown(f"- {doc.page_content[:200]}...")  # preview of chunk
+                    st.markdown(f"- {doc.page_content[:200]}...")
 
     except Exception as e:
-        st.error(f"⚠️ Error: {e}")
+        st.error(f"⚠️ Error while querying: {e}")
