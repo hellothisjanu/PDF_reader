@@ -1,0 +1,6 @@
+streamlit
+langchain
+openai
+chromadb
+PyPDF2
+requests
