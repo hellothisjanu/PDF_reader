@@ -6,11 +6,12 @@ from langchain.vectorstores import FAISS
 from langchain.chains import ConversationalRetrievalChain
 
 import google.generativeai as genai
+import numpy as np
 
 # ------------------------
 # Configure Google Gemini API key
 # ------------------------
-genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])  # add your key in Streamlit secrets
+genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
 # ------------------------
 # Extract text from PDF
@@ -36,17 +37,27 @@ def create_chunks(text):
     return docs
 
 # ------------------------
-# Build FAISS vector store
+# Dummy embeddings for FAISS (just converts text to numeric vectors)
+# ------------------------
+def get_dummy_embeddings(texts):
+    embeddings = []
+    for t in texts:
+        arr = np.array([ord(c) for c in t[:512]])  # simple char-to-int vector
+        # Pad or truncate to fixed length
+        if len(arr) < 512:
+            arr = np.pad(arr, (0, 512 - len(arr)))
+        else:
+            arr = arr[:512]
+        embeddings.append(arr)
+    return np.array(embeddings)
+
+# ------------------------
+# Build FAISS vector store manually
 # ------------------------
 def build_vectorstore(docs):
-    # We'll create embeddings using Gemini API directly (no OpenAI)
-    embeddings = []
-    for doc in docs:
-        # Gemini does not provide direct embedding API yet
-        # We simulate embeddings using a simple text hashing approach
-        embeddings.append([ord(c) for c in doc.page_content[:512]])  # basic numeric vector
-
-    vectordb = FAISS.from_texts([doc.page_content for doc in docs], embeddings)
+    texts = [doc.page_content for doc in docs]
+    embeddings = get_dummy_embeddings(texts)
+    vectordb = FAISS(embeddings, texts)  # build FAISS manually
     return vectordb
 
 # ------------------------
@@ -77,7 +88,7 @@ if uploaded_files:
 
     query = st.text_input("Ask a question about your documents:")
     if query:
-        # Simple retrieval
+        # Retrieve top 3 relevant chunks using cosine similarity
         relevant_docs = vectordb.similarity_search(query, k=3)
         context = "\n\n".join([doc.page_content for doc in relevant_docs])
         prompt = f"Answer the question based on the following context:\n{context}\n\nQuestion: {query}"
